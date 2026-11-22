@@ -1,7 +1,7 @@
 // make.fun bounty: Build the best Sokoban solver
 // Move-based A* with push-distance heuristic + corner deadlock pruning.
 // State = (player, boxes). Heuristic = sum of push-distances.
-// Expansion limit: 800k per level. Time budget ~22s.
+// Per-instance budget: 10s wall, 200k expansions. Total wall budget 60s for 5 instances.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -73,7 +73,7 @@ class MinHeap {
   get size() { return this.a.length; }
 }
 
-function solve(level: string): string {
+function solve(level: string, timeBudgetMs: number, expBudget: number): string {
   const { walls, boxes: sb, goals, player: sp, maxR, maxC } = parse(level);
   if (sp < 0) return "";
   const dist = pushDist(walls, goals, maxR, maxC);
@@ -91,12 +91,10 @@ function solve(level: string): string {
   bestG.set(startKey, 0);
   const prev = new Map<string, { prevKey: string; move: string }>();
 
-  const MAX_EXP = 800000;
   const TIME_START = Date.now();
-  const TIME_LIMIT = 21000;
   let exp = 0, goalKey = "";
 
-  while (heap.size > 0 && exp < MAX_EXP && Date.now() - TIME_START < TIME_LIMIT) {
+  while (heap.size > 0 && exp < expBudget && Date.now() - TIME_START < timeBudgetMs) {
     const { f, g, key } = heap.pop();
     if (g > (bestG.get(key) ?? Infinity)) continue;
     const [playerStr, ...boxStrs] = key.split("|");
@@ -149,10 +147,21 @@ function solve(level: string): string {
   return moves.join("");
 }
 
-for (const id of readdirSync(I).sort()) {
+const PER_INSTANCE_TIME_MS = 10000; // 10s per instance
+const PER_INSTANCE_EXP = 200000;    // 200k expansions per instance
+const TOTAL_WALL_START = Date.now();
+const TOTAL_WALL_LIMIT = 55000;     // 55s total (leave 5s margin)
+
+const ids = readdirSync(I).sort();
+for (const id of ids) {
+  if (Date.now() - TOTAL_WALL_START > TOTAL_WALL_LIMIT) break;
   let level = "";
   try { level = readFileSync(join(I, id, "level.txt"), "utf8"); } catch { continue; }
-  const moves = solve(level);
+  // Progressive budget: more time for harder instances (higher index = more rooms)
+  const idx = parseInt(id.slice(1)) || 1;
+  const timeBudget = Math.min(PER_INSTANCE_TIME_MS * idx, 25000); // 10s, 20s, 30s, 40s, 50s
+  const expBudget = Math.min(PER_INSTANCE_EXP * idx, 500000);
+  const moves = solve(level, timeBudget, expBudget);
   mkdirSync(join(O, id), { recursive: true });
   writeFileSync(join(O, id, "solution.txt"), moves + "\n");
 }
